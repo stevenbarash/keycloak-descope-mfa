@@ -5,7 +5,6 @@ const OIDCStrategy = require('passport-openidconnect').Strategy;
 const session = require('express-session');
 const path = require('path');
 const axios = require('axios');
-const descope = require('@descope/node-sdk');
 
 const app = express();
 
@@ -48,12 +47,6 @@ app.use(passport.session());
 // Serve static files (for custom CSS/images if needed)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Descope MFA Middleware
-function requireDescopeMFA(req, res, next) {
-  if (req.session.descopeMfaVerified) return next();
-  res.redirect('/descope/mfa');
-}
-
 // Helper: Render HTML with Bootstrap
 function renderPage({ title, body, user }) {
   return `<!DOCTYPE html>
@@ -84,48 +77,44 @@ function renderPage({ title, body, user }) {
 // Routes
 app.get('/', (req, res) => {
   if (req.isAuthenticated()) {
-    requireDescopeMFA(req, res, () => {
-      res.send(renderPage({
-        title: 'Welcome',
-        user: req.user,
-        body: `
-          <div class="card shadow-sm p-4 mb-4">
-            <h2 class="mb-3">Welcome, ${req.user.displayName || req.user.id}!</h2>
-            <p class="lead">You are logged in via <strong>Keycloak</strong> with <strong>Descope</strong> MFA.</p>
-            <h5 class="mt-4">Your Authentication Details</h5>
-            <pre class="bg-light p-3 rounded border">${JSON.stringify(req.user, null, 2)}</pre>
-            <a href="/logout" class="btn btn-danger mt-3">Logout</a>
-          </div>
-          <div class="card shadow-sm p-4">
-            <h4>How it Works</h4>
-            <ol class="mb-2">
-              <li><strong>Login with Keycloak:</strong> Authenticate using your Keycloak credentials.</li>
-              <li><strong>MFA with Descope:</strong> After primary authentication, Descope enforces Multi-Factor Authentication (MFA) for enhanced security.</li>
-              <li><strong>Access Granted:</strong> Upon successful MFA, you are logged in and can view your profile details above.</li>
-            </ol>
-            <p class="text-muted">This demo showcases a seamless integration of Keycloak for SSO and Descope for MFA.</p>
-          </div>
-        `
-      }));
-    });
+    res.send(renderPage({
+      title: 'Welcome',
+      user: req.user,
+      body: `
+        <div class="card shadow-sm p-4 mb-4">
+          <h2 class="mb-3">Welcome, ${req.user.displayName || req.user.id}!</h2>
+          <p class="lead">You are logged in via <strong>Keycloak</strong>.</p>
+          <h5 class="mt-4">Your Authentication Details</h5>
+          <pre class="bg-light p-3 rounded border">${JSON.stringify(req.user, null, 2)}</pre>
+          <a href="/logout" class="btn btn-danger mt-3">Logout</a>
+        </div>
+        <div class="card shadow-sm p-4">
+          <h4>How it Works</h4>
+          <ol class="mb-2">
+            <li><strong>Login with Keycloak:</strong> Authenticate using your Keycloak credentials.</li>
+            <li><strong>Access Granted:</strong> Upon successful authentication, you are logged in and can view your profile details above.</li>
+          </ol>
+          <p class="text-muted">This demo showcases a seamless integration of Keycloak for SSO.</p>
+        </div>
+      `
+    }));
   } else {
     res.send(renderPage({
-      title: 'Keycloak + Descope MFA Demo',
+      title: 'Keycloak Demo',
       user: null,
       body: `
         <div class="card shadow-sm p-4 mb-4 text-center">
-          <h2 class="mb-3">Keycloak + Descope MFA Demo</h2>
-          <p class="lead">This application demonstrates how to integrate <strong>Keycloak</strong> for authentication and <strong>Descope</strong> for Multi-Factor Authentication (MFA).</p>
+          <h2 class="mb-3">Keycloak OIDC Demo</h2>
+          <p class="lead">This application demonstrates how to integrate <strong>Keycloak</strong> for authentication.</p>
           <a href="/login" class="btn btn-primary btn-lg mt-3">Login with Keycloak</a>
         </div>
         <div class="card shadow-sm p-4">
           <h4>How it Works</h4>
           <ol class="mb-2">
             <li><strong>Login with Keycloak:</strong> Authenticate using your Keycloak credentials.</li>
-            <li><strong>MFA with Descope:</strong> After primary authentication, Descope enforces Multi-Factor Authentication (MFA) for enhanced security.</li>
-            <li><strong>Access Granted:</strong> Upon successful MFA, you are logged in and can view your profile details.</li>
+            <li><strong>Access Granted:</strong> Upon successful authentication, you are logged in and can view your profile details.</li>
           </ol>
-          <p class="text-muted">This demo showcases a seamless integration of Keycloak for SSO and Descope for MFA.</p>
+          <p class="text-muted">This demo showcases a seamless integration of Keycloak for SSO.</p>
         </div>
       `
     }));
@@ -151,66 +140,6 @@ app.get('/error', (req, res) => {
   }));
 });
 
-const descopeClient = descope({ projectId: process.env.DESCOPE_PROJECT_ID });
-
-app.get('/descope/mfa', async (req, res) => {
-  if (!req.isAuthenticated()) return res.redirect('/login');
-  let userEmail = req.user.email;
-  if (!userEmail && req.user.id) {
-    if (typeof req.user.id === 'string') {
-      userEmail = req.user.id;
-    } else if (typeof req.user.id === 'object') {
-      userEmail = req.user.id.username || (req.user.id.emails && req.user.id.emails[0] && req.user.id.emails[0].value);
-    }
-  }
-  console.log('Descope MFA: userEmail', userEmail);
-  if (!userEmail) {
-    return res.status(400).send('No email or user ID found for MFA');
-  }
-  try {
-    // Trigger a magic link for step-up MFA
-    const redirectUrl = process.env.DESCOPE_REDIRECT_URL || `${process.env.CALLBACK_URL}/descope/callback`;
-    await descopeClient.magicLink.signIn.email(userEmail, redirectUrl, { stepup: true });
-    // Render a page instructing the user to check their email
-    res.send(renderPage({
-      title: 'Descope MFA',
-      user: req.user,
-      body: `
-        <div class="alert alert-info mt-4">A magic link has been sent to <strong>${userEmail}</strong>. Please check your email and click the link to complete MFA.</div>
-        <a href="/logout" class="btn btn-secondary mt-3">Cancel</a>
-      `
-    }));
-  } catch (error) {
-    console.error('Descope MFA initiation error:', error);
-    res.status(500).send('Error initiating Descope MFA: ' + error.message);
-  }
-});
-
-app.get('/descope/callback', async (req, res) => {
-  const { token, error } = req.query;
-  if (error) {
-    return res.status(400).send('Descope MFA failed: ' + error);
-  }
-  if (!token || typeof token !== 'string') {
-    return res.status(400).send('No magic link token provided');
-  }
-  try {
-    // Validate the magic link token
-    const validateResponse = await descopeClient.magicLink.signIn.verify({
-      token,
-    });
-    if (!validateResponse.sessionJwt) {
-      return res.status(401).send('No session token received');
-    }
-    await descopeClient.session.validate(validateResponse.sessionJwt);
-    req.session.descopeMfaVerified = true;
-    res.redirect('/');
-  } catch (err) {
-    console.error('Descope MFA validation error:', err);
-    res.status(401).send('Descope MFA validation failed');
-  }
-});
-
 app.get('/logout', async (req, res) => {
   try {
     // Revoke Keycloak session
@@ -219,16 +148,14 @@ app.get('/logout', async (req, res) => {
       const endSessionUrl = `${process.env.OIDC_ISSUER}/protocol/openid-connect/logout?id_token_hint=${keycloak.idToken}&post_logout_redirect_uri=${encodeURIComponent(process.env.CALLBACK_URL)}`;
       await axios.get(endSessionUrl);
     }
-    // Destroy local session and Descope MFA flag
+    // Destroy local session
     req.logout(() => {
-      req.session.descopeMfaVerified = false;
       req.session.destroy(() => {
         res.redirect('/');
       });
     });
   } catch (err) {
     req.logout(() => {
-      req.session.descopeMfaVerified = false;
       req.session.destroy(() => {
         res.redirect('/');
       });
