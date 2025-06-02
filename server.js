@@ -22,13 +22,32 @@ passport.use('oidc', new OIDCStrategy({
   callbackURL: process.env.CALLBACK_URL,
   scope: 'openid profile email'
 }, (issuer, sub, profile, accessToken, refreshToken, params, done) => {
-  // Patch: ensure email and id are present
-  if (!profile.email && profile.emails && profile.emails.length > 0) {
-    profile.email = profile.emails[0].value;
+  // If sub is an object, copy its fields into profile if missing
+  if (sub && typeof sub === 'object') {
+    if (!profile.id) profile.id = sub.id;
+    if (!profile.displayName) profile.displayName = sub.displayName;
+    if (!profile.username) profile.username = sub.username;
+    if (!profile.name) profile.name = sub.name;
+    if (!profile.email && sub.emails && sub.emails[0] && sub.emails[0].value) profile.email = sub.emails[0].value;
   }
-  if (!profile.id) {
-    profile.id = sub;
-  }
+  // Debug: log the full profile and sub
+  console.log('DEBUG OIDC profile:', JSON.stringify(profile, null, 2));
+  console.log('DEBUG OIDC sub:', sub);
+  // Set displayName to username or displayName, checking both root and nested id object
+  profile.displayName =
+    profile.username ||
+    (profile.id && profile.id.username) ||
+    profile.displayName ||
+    (profile.id && profile.id.displayName) ||
+    profile.preferred_username ||
+    (profile.id && profile.id.preferred_username) ||
+    profile.name ||
+    (profile.id && profile.id.name && (profile.id.name.givenName + ' ' + profile.id.name.familyName)) ||
+    profile.email ||
+    (profile.id && profile.id.email) ||
+    profile.id ||
+    (typeof sub === 'string' ? sub : '') ||
+    'User';
   console.log('OIDC profile:', profile);
   profile._keycloak = {
     accessToken,
